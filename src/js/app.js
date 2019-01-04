@@ -14,7 +14,7 @@ $(document).ready(function () {
             .then(function (element) {
                 document.body.appendChild(element);
             })
-            .catch(error => {
+            .catch(() => {
                 viz = new Viz({workerURL});
             });
 

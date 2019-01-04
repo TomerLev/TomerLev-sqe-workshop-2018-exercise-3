@@ -18,62 +18,64 @@ const generateCFG = (code, args) => {
     dotCode = splitStatementsByNewLine(dotCode);
     dotCode = removeLetWord(dotCode);
     dotCode = 'digraph {\n' + dotCode + '\n}';
-    console.log(dotCode);
+    //console.log(dotCode);
     return dotCode;
 };
 
-
-function colorTheGraph(code, paramNames, args) {
-    let colorString = new StringBuilder();
-    let arrayOfArgs = divideIntoArgs(args);
-    let throughNodes = [];
+function addArgs(paramNames, colorString, arrayOfArgs) {
     for (let i = 0; i < paramNames.length; i++) {
         colorString.append('let ' + paramNames[i].name + ' = ' + arrayOfArgs[i] + '; ');
     }
-    let splittedByNewLine = code.split('\n');
-    let endOfFunction = false;
-    let currentNumber = [1];
-    while (!endOfFunction) {
-        for (let i = 0; i < splittedByNewLine.length; i++) {
-            if (splittedByNewLine[i].includes('n' + currentNumber[0]) && !splittedByNewLine[i].includes('->')) {
-                endOfFunction = splittedByNewLine[i].includes('return');
-                throughNodes.push('n' + currentNumber[0]);
-                colorString.append(' ' + splittedByNewLine[i].slice(splittedByNewLine[i].indexOf('"') + 1, splittedByNewLine[i].lastIndexOf('"')));
-                if (splittedByNewLine[i].includes('diamond')) {
-                    if (eval(colorString.toString())) {
-                        for (let j = 0; j < splittedByNewLine.length; j++) {
-                            if (splittedByNewLine[j].includes('n' + currentNumber[0]) && splittedByNewLine[j].includes('->') && splittedByNewLine[j].includes('true')) {
-                                currentNumber[0] = splittedByNewLine[j].slice(splittedByNewLine[j].lastIndexOf('n') + 1, splittedByNewLine[j].lastIndexOf('[') - 1);
-                                break;
-                            }
-                        }
-                    }
-                    else {
-                        for (let j = 0; j < splittedByNewLine.length; j++) {
-                            if (splittedByNewLine[j].includes('n' + currentNumber[0]) && splittedByNewLine[j].includes('->') && splittedByNewLine[j].includes('false')) {
-                                currentNumber[0] = splittedByNewLine[j].slice(splittedByNewLine[j].lastIndexOf('n') + 1, splittedByNewLine[j].lastIndexOf('[') - 1);
-                                break;
-                            }
-                        }
-                    }
-                    let string = colorString.toString();
-                    string = string.slice(0, string.lastIndexOf(';') + 1);
-                    colorString = new StringBuilder();
-                    colorString.append(string);
-                    break;
-                }
-                else {
-                    for (let j = 0; j < splittedByNewLine.length; j++) {
-                        if (splittedByNewLine[j].includes('n' + currentNumber[0]) && splittedByNewLine[j].includes('->') && (splittedByNewLine[j].indexOf('->') > splittedByNewLine[j].indexOf('n' + currentNumber))) {
-                            currentNumber[0] = splittedByNewLine[j].slice(splittedByNewLine[j].lastIndexOf('n') + 1, splittedByNewLine[j].lastIndexOf('[') - 1);
-                            break;
-                        }
-                    }
-                    break;
-                }
-            }
+}
+
+function checkAndAppend(splittedByNewLine, i, colorString) {
+    let currentStr = ' ' + splittedByNewLine[i].slice(splittedByNewLine[i].indexOf('"') + 1, splittedByNewLine[i].lastIndexOf('"'));
+    if (currentStr.charAt(currentStr.length - 1) !== ';') {
+        currentStr = currentStr + ';';
+    }
+    colorString.append(currentStr);
+}
+
+function includesNecessaryThings(str, currentNumber, boolean) {
+    return str.includes('n' + currentNumber) && str.includes('->') && str.includes(boolean);
+}
+
+function searchNext(splittedByNewLine, currentNumber, boolean) {
+    for (let j = 0; j < splittedByNewLine.length; j++) {
+        if (includesNecessaryThings(splittedByNewLine[j], currentNumber[0], boolean) && (splittedByNewLine[j].indexOf('n' + currentNumber[0]) < splittedByNewLine[j].indexOf('->'))) {
+            currentNumber[0] = splittedByNewLine[j].slice(splittedByNewLine[j].lastIndexOf('n') + 1, splittedByNewLine[j].lastIndexOf('[') - 1);
+            break;
         }
     }
+}
+
+function searchNextByEval(colorString, splittedByNewLine, currentNumber) {
+    if (eval(colorString.toString())) {
+        searchNext(splittedByNewLine, currentNumber, 'true');
+    }
+    else {
+        searchNext(splittedByNewLine, currentNumber, 'false');
+    }
+    cutAndNewStringBuilder(colorString);
+}
+
+function cutAndNewStringBuilder(colorString) {
+    let string = colorString.toString();
+    string = string.slice(0, string.lastIndexOf(';') + 1);
+    colorString = new StringBuilder();
+    colorString.append(string);
+}
+
+function searchNext2(splittedByNewLine, currentNumber) {
+    for (let j = 0; j < splittedByNewLine.length; j++) {
+        if (splittedByNewLine[j].includes('n' + currentNumber[0]) && splittedByNewLine[j].includes('->') && (splittedByNewLine[j].indexOf('->') > splittedByNewLine[j].indexOf('n' + currentNumber))) {
+            currentNumber[0] = splittedByNewLine[j].slice(splittedByNewLine[j].lastIndexOf('n') + 1, splittedByNewLine[j].lastIndexOf('[') - 1);
+            break;
+        }
+    }
+}
+
+function colorNodes(splittedByNewLine, throughNodes) {
     for (let i = 0; i < splittedByNewLine.length; i++) {
         if (!splittedByNewLine[i].includes('->')) {
             let stateNumber = splittedByNewLine[i].slice(splittedByNewLine[i].indexOf('n'), splittedByNewLine[i].indexOf('[') - 1);
@@ -82,6 +84,28 @@ function colorTheGraph(code, paramNames, args) {
             }
         }
     }
+}
+
+function isNext(str, num) {
+    return str.includes('n' + num) && !str.includes('->');
+}
+
+function colorTheGraph(code, paramNames, args) {
+    let colorString = new StringBuilder(), arrayOfArgs = divideIntoArgs(args), throughNodes = [],
+        splittedByNewLine = code.split('\n'), endOfFunction = false, currentNumber = [1];
+    addArgs(paramNames, colorString, arrayOfArgs);
+    while (!endOfFunction) {
+        for (let i = 0; i < splittedByNewLine.length; i++) {
+            if (isNext(splittedByNewLine[i], currentNumber[0])) {
+                endOfFunction = splittedByNewLine[i].includes('return');
+                throughNodes.push('n' + currentNumber[0]);
+                checkAndAppend(splittedByNewLine, i, colorString);
+                splittedByNewLine[i].includes('diamond') ? searchNextByEval(colorString, splittedByNewLine, currentNumber) : searchNext2(splittedByNewLine, currentNumber);
+                break;
+            }
+        }
+    }
+    colorNodes(splittedByNewLine, throughNodes);
     return splittedByNewLine.filter((element) => (element !== '')).join('\n');
 }
 
@@ -99,89 +123,114 @@ function getTopNumber(splittedByNewLine, topNumber) {
     topNumber[0]++;
 }
 
-function twoToOne(code)
-{
+function twoToOne(code) {
     code = code.replace(/&&/g, '&');
     code = code.split('||').join('|');
     return code;
 }
+
+function extractFirstAnd(splittedByNewLine, i, topNumber) {
+    let secondCond = splittedByNewLine[i].slice(splittedByNewLine[i].indexOf('&') + 2, splittedByNewLine[i].lastIndexOf('"'));
+    splittedByNewLine[i] = splittedByNewLine[i].slice(0, splittedByNewLine[i].indexOf('&')) + splittedByNewLine[i].slice(splittedByNewLine[i].lastIndexOf('"'), splittedByNewLine[i].length);
+    return splittedByNewLine.concat('n' + topNumber[0] + ' [label="' + secondCond + '"' + ',shape=diamond]');
+}
+
+function extractFirstOr(splittedByNewLine, i, topNumber) {
+    let secondCond = splittedByNewLine[i].slice(splittedByNewLine[i].indexOf('|') + 2, splittedByNewLine[i].lastIndexOf('"'));
+    splittedByNewLine[i] = splittedByNewLine[i].slice(0, splittedByNewLine[i].indexOf('|')) + splittedByNewLine[i].slice(splittedByNewLine[i].lastIndexOf('"'), splittedByNewLine[i].length);
+    return splittedByNewLine.concat('n' + topNumber[0] + ' [label="' + secondCond + '"' + ',shape=diamond]');
+}
+
+function findTrueTransitionAnd(splittedByNewLine, j, toRemove, transitionTrueCase, from) {
+    if (splittedByNewLine[j].includes('->') && splittedByNewLine[j].includes(from) && splittedByNewLine[j].includes('label="true"')) {
+        transitionTrueCase[0] = splittedByNewLine[j];
+        if (!toRemove.includes(transitionTrueCase[0])) {
+            splittedByNewLine[j] = '';
+        }
+        transitionTrueCase[0] = transitionTrueCase[0].slice(transitionTrueCase[0].lastIndexOf('n'), transitionTrueCase[0].lastIndexOf(' '));
+    }
+}
+
+function findFalseTransitionOr(splittedByNewLine, j, toRemove, transitionFalseCase, from) {
+    if (splittedByNewLine[j].includes('->') && splittedByNewLine[j].includes(from) && splittedByNewLine[j].includes('label="false"')) {
+        transitionFalseCase[0] = splittedByNewLine[j];
+        if (!toRemove.includes(transitionFalseCase[0])) {
+            splittedByNewLine[j] = '';
+        }
+        transitionFalseCase[0] = transitionFalseCase[0].slice(transitionFalseCase[0].lastIndexOf('n'), transitionFalseCase[0].lastIndexOf(' '));
+    }
+}
+
+function madeTransitionsAnd(splittedByNewLine, toRemove, from, to) {
+    let transitionTrueCase = [], transitionFalseCase = [];
+    for (let j = 0; j < splittedByNewLine.length; j++) {
+        findTrueTransitionAnd(splittedByNewLine, j, toRemove, transitionTrueCase, from);
+        if (splittedByNewLine[j].includes('->') && splittedByNewLine[j].includes(from) && splittedByNewLine[j].includes('label="false"')) {
+            transitionFalseCase[0] = splittedByNewLine[j];
+            transitionFalseCase[0] = transitionFalseCase[0].slice(transitionFalseCase[0].lastIndexOf('n'), transitionFalseCase[0].lastIndexOf(' '));
+        }
+    }
+    splittedByNewLine = splittedByNewLine.concat(from + ' -> ' + to + ' [label="true"]');
+    toRemove.push(from + ' -> ' + to + ' [label="true"]');
+    splittedByNewLine = splittedByNewLine.concat(to + ' -> ' + transitionTrueCase + ' [label="true"]');
+    return splittedByNewLine.concat(to + ' -> ' + transitionFalseCase + ' [label="false"]');
+}
+
+function madeTransitionsOr(splittedByNewLine, toRemove, from, to) {
+    let transitionTrueCase = [], transitionFalseCase = [];
+    for (let j = 0; j < splittedByNewLine.length; j++) {
+        if (splittedByNewLine[j].includes('->') && splittedByNewLine[j].includes(from) && splittedByNewLine[j].includes('label="true"')) {
+            transitionTrueCase[0] = splittedByNewLine[j];
+            transitionTrueCase[0] = transitionTrueCase[0].slice(transitionTrueCase[0].lastIndexOf('n'), transitionTrueCase[0].lastIndexOf(' '));
+        }
+        findFalseTransitionOr(splittedByNewLine, j, toRemove, transitionFalseCase, from);
+    }
+    splittedByNewLine = splittedByNewLine.concat(from + ' -> ' + to + ' [label="false"]');
+    toRemove.push(from + ' -> ' + to + ' [label="false"]');
+    splittedByNewLine = splittedByNewLine.concat(to + ' -> ' + transitionTrueCase + ' [label="true"]');
+    return splittedByNewLine.concat(to + ' -> ' + transitionFalseCase + ' [label="false"]');
+}
+
 function splitComplexConditions(code, toRemove) {
-    code = twoToOne(code)
-    let splittedByNewLine = code.split('\n');
-    let topNumber = [-1];
+    code = twoToOne(code);
+    let splittedByNewLine = code.split('\n'), topNumber = [-1];
     getTopNumber(splittedByNewLine, topNumber);
     for (let i = 0; i < splittedByNewLine.length; i++) {
         if (splittedByNewLine[i].includes('&')) {
-            let secondCond = splittedByNewLine[i].slice(splittedByNewLine[i].indexOf('&') + 2, splittedByNewLine[i].lastIndexOf('"'));
-            splittedByNewLine[i] = splittedByNewLine[i].slice(0, splittedByNewLine[i].indexOf('&')) + splittedByNewLine[i].slice(splittedByNewLine[i].lastIndexOf('"'), splittedByNewLine[i].length);
-            splittedByNewLine = splittedByNewLine.concat('n' + topNumber[0] + ' [label="' + secondCond + '"' + ',shape=diamond]');
-            let from = splittedByNewLine[i].slice(0, splittedByNewLine[i].indexOf(' '));
-            let to = 'n' + topNumber[0];
-            let transitionTrueCase;
-            let transitionFalseCase;
-            for (let j = 0; j < splittedByNewLine.length; j++) {
-                if (splittedByNewLine[j].includes('->') && splittedByNewLine[j].includes(from) && splittedByNewLine[j].includes('label="true"')) {
-                    transitionTrueCase = splittedByNewLine[j];
-                    if (!toRemove.includes(transitionTrueCase)) {
-                        splittedByNewLine[j] = '';
-                    }
-                    transitionTrueCase = transitionTrueCase.slice(transitionTrueCase.lastIndexOf('n'), transitionTrueCase.lastIndexOf(' '));
-                }
-                if (splittedByNewLine[j].includes('->') && splittedByNewLine[j].includes(from) && splittedByNewLine[j].includes('label="false"')) {
-                    transitionFalseCase = splittedByNewLine[j];
-                    transitionFalseCase = transitionFalseCase.slice(transitionFalseCase.lastIndexOf('n'), transitionFalseCase.lastIndexOf(' '));
-                }
-            }
-            splittedByNewLine = splittedByNewLine.concat(from + ' -> ' + to + ' [label="true"]');
-            toRemove.push(from + ' -> ' + to + ' [label="true"]');
-            splittedByNewLine = splittedByNewLine.concat(to + ' -> ' + transitionTrueCase + ' [label="true"]');
-            splittedByNewLine = splittedByNewLine.concat(to + ' -> ' + transitionFalseCase + ' [label="false"]');
+            splittedByNewLine = extractAndTransitionAnd(splittedByNewLine, i, topNumber, toRemove);
             break;
         }
         else if (splittedByNewLine[i].includes('|')) {
-            let secondCond = splittedByNewLine[i].slice(splittedByNewLine[i].indexOf('|') + 2, splittedByNewLine[i].lastIndexOf('"'));
-            splittedByNewLine[i] = splittedByNewLine[i].slice(0, splittedByNewLine[i].indexOf('|')) + splittedByNewLine[i].slice(splittedByNewLine[i].lastIndexOf('"'), splittedByNewLine[i].length);
-            splittedByNewLine = splittedByNewLine.concat('n' + topNumber[0] + ' [label="' + secondCond + '"' + ',shape=diamond]');
-            let from = splittedByNewLine[i].slice(0, splittedByNewLine[i].indexOf(' '));
-            let to = 'n' + topNumber[0];
-            let transitionTrueCase,transitionFalseCase;
-            for (let j = 0; j < splittedByNewLine.length; j++) {
-                if (splittedByNewLine[j].includes('->') && splittedByNewLine[j].includes(from) && splittedByNewLine[j].includes('label="true"')) {
-                    transitionTrueCase = splittedByNewLine[j];
-                    transitionTrueCase = transitionTrueCase.slice(transitionTrueCase.lastIndexOf('n'), transitionTrueCase.lastIndexOf(' '));
-                }
-                if (splittedByNewLine[j].includes('->') && splittedByNewLine[j].includes(from) && splittedByNewLine[j].includes('label="false"')) {
-                    transitionFalseCase = splittedByNewLine[j];
-                    if (!toRemove.includes(transitionFalseCase)) {
-                        splittedByNewLine[j] = '';
-                    }
-                    transitionFalseCase = transitionFalseCase.slice(transitionFalseCase.lastIndexOf('n'), transitionFalseCase.lastIndexOf(' '));
-                }
-            }
-            splittedByNewLine = splittedByNewLine.concat(from + ' -> ' + to + ' [label="false"]');
-            toRemove.push(from + ' -> ' + to + ' [label="false"]');
-            splittedByNewLine = splittedByNewLine.concat(to + ' -> ' + transitionTrueCase + ' [label="true"]');
-            splittedByNewLine = splittedByNewLine.concat(to + ' -> ' + transitionFalseCase + ' [label="false"]');
+            splittedByNewLine = extractAndTransitionOr(splittedByNewLine, i, topNumber, toRemove);
             break;
         }
     }
     let toReturnCode = splittedByNewLine.filter((element) => (element !== '')).join('\n');
     splittedByNewLine = toReturnCode.split('\n');
-    let flag = false;
-    for (let i = 0; i < splittedByNewLine.length; i++) {
-        if (splittedByNewLine[i].includes('&') || splittedByNewLine[i].includes('|')) {
-            flag = true;
-            break;
-        }
-    }
-    if (flag) {
-        return splitComplexConditions(toReturnCode, toRemove);
-    }
-    else {
-        return toReturnCode;
-    }
+    let flag = ifStillComplex(splittedByNewLine);
+    return flag ? splitComplexConditions(toReturnCode, toRemove) : toReturnCode;
 }
 
+function ifStillComplex(splittedByNewLine) {
+    for (let i = 0; i < splittedByNewLine.length; i++) {
+        if (splittedByNewLine[i].includes('&') || splittedByNewLine[i].includes('|')) {
+            return true;
+        }
+    }
+    return false;
+}
+
+function extractAndTransitionAnd(splittedByNewLine, i, topNumber, toRemove) {
+    splittedByNewLine = extractFirstAnd(splittedByNewLine, i, topNumber);
+    let from = splittedByNewLine[i].slice(0, splittedByNewLine[i].indexOf(' ')), to = 'n' + topNumber[0];
+    return madeTransitionsAnd(splittedByNewLine, toRemove, from, to);
+}
+
+function extractAndTransitionOr(splittedByNewLine, i, topNumber, toRemove) {
+    splittedByNewLine = extractFirstOr(splittedByNewLine, i, topNumber);
+    let from = splittedByNewLine[i].slice(0, splittedByNewLine[i].indexOf(' ')), to = 'n' + topNumber[0];
+    return madeTransitionsOr(splittedByNewLine, toRemove, from, to);
+}
 
 function makeRectangle(code) {
     let splittedByNewLine = code.split('\n');
