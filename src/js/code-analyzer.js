@@ -1,267 +1,410 @@
 import * as esprima from 'esprima';
-import * as escodegen from 'escodegen';
 
 const StringBuilder = require('string-builder');
-const beautify = require('js-beautify').js;
+const esgraph = require('esgraph');
 
-const parseCode = (codeToParse, argumentsSection) => {
-    let arrayOfArgs = divideIntoArgs(argumentsSection);
-    let parsedCode = esprima.parseScript(codeToParse, {loc: true, range: true});
-    let functionAfterSub = new StringBuilder();
-    let localVarsToVals = new Map();
-    let globalVarsToVals = new Map();
-    let argsToValues = new Map();
-    parsedCode.body.forEach(function (element) {
-        substitutePart(element, localVarsToVals, globalVarsToVals, argsToValues, functionAfterSub, arrayOfArgs, true);
-    });
-    functionAfterSub = beautify(functionAfterSub.toString(), {indent_size: 4});
-    let linesToGreen = [];
-    let linesToRed = [];
-    determineColors(functionAfterSub, linesToGreen, linesToRed, argsToValues, globalVarsToVals);
-    let functionAfterSubSplittedByNewLine = functionAfterSub.split('\n');
-    return [functionAfterSubSplittedByNewLine, linesToRed, linesToGreen];
+const generateCFG = (code, args) => {
+    const cfg = esgraph(esprima.parse(code, {range: true}).body[0].body);
+    let dotCode = esgraph.dot(cfg, {counter: 0, source: code});
+    dotCode = deleteExceptionTransitions(dotCode);
+    dotCode = deleteEntryAndExitStates(dotCode);
+    dotCode = makeConditionsDiamondShape(dotCode);
+    dotCode = splitComplexConditions(dotCode, []);
+    dotCode = unifyStates(dotCode);
+    dotCode = makeRectangle(dotCode);
+    dotCode = doMergeStates(dotCode);
+    dotCode = colorTheGraph(dotCode, esprima.parse(code, {range: true}).body[0].params, args);
+    dotCode = numberStates(dotCode);
+    dotCode = splitStatementsByNewLine(dotCode);
+    dotCode = removeLetWord(dotCode);
+    dotCode = 'digraph {\n' + dotCode + '\n}';
+    console.log(dotCode);
+    return dotCode;
 };
 
 
-function substitutePart(data, localVarsToVals, globalVarsToVals, argsToValues, functionAfterSub, arrayOfArgs, isGlobal) {
-    if (data.type.localeCompare('ReturnStatement') === 0) {
-        substituteReturnStatement(data, localVarsToVals, globalVarsToVals, argsToValues, functionAfterSub);
+function colorTheGraph(code, paramNames, args) {
+    let colorString = new StringBuilder();
+    let arrayOfArgs = divideIntoArgs(args);
+    let throughNodes = [];
+    for (let i = 0; i < paramNames.length; i++) {
+        colorString.append('let ' + paramNames[i].name + ' = ' + arrayOfArgs[i] + '; ');
     }
-    else if (data.type.localeCompare('FunctionDeclaration') === 0) {
-        substituteFunctionDeclaration(data, localVarsToVals, globalVarsToVals, argsToValues, functionAfterSub, arrayOfArgs);
+    let splittedByNewLine = code.split('\n');
+    let endOfFunction = false;
+    let currentNumber = [1];
+    while (!endOfFunction) {
+        for (let i = 0; i < splittedByNewLine.length; i++) {
+            if (splittedByNewLine[i].includes('n' + currentNumber[0]) && !splittedByNewLine[i].includes('->')) {
+                endOfFunction = splittedByNewLine[i].includes('return');
+                throughNodes.push('n' + currentNumber[0]);
+                colorString.append(' ' + splittedByNewLine[i].slice(splittedByNewLine[i].indexOf('"') + 1, splittedByNewLine[i].lastIndexOf('"')));
+                if (splittedByNewLine[i].includes('diamond')) {
+                    if (eval(colorString.toString())) {
+                        for (let j = 0; j < splittedByNewLine.length; j++) {
+                            if (splittedByNewLine[j].includes('n' + currentNumber[0]) && splittedByNewLine[j].includes('->') && splittedByNewLine[j].includes('true')) {
+                                currentNumber[0] = splittedByNewLine[j].slice(splittedByNewLine[j].lastIndexOf('n') + 1, splittedByNewLine[j].lastIndexOf('[') - 1);
+                                break;
+                            }
+                        }
+                    }
+                    else {
+                        for (let j = 0; j < splittedByNewLine.length; j++) {
+                            if (splittedByNewLine[j].includes('n' + currentNumber[0]) && splittedByNewLine[j].includes('->') && splittedByNewLine[j].includes('false')) {
+                                currentNumber[0] = splittedByNewLine[j].slice(splittedByNewLine[j].lastIndexOf('n') + 1, splittedByNewLine[j].lastIndexOf('[') - 1);
+                                break;
+                            }
+                        }
+                    }
+                    let string = colorString.toString();
+                    string = string.slice(0, string.lastIndexOf(';') + 1);
+                    colorString = new StringBuilder();
+                    colorString.append(string);
+                    break;
+                }
+                else {
+                    for (let j = 0; j < splittedByNewLine.length; j++) {
+                        if (splittedByNewLine[j].includes('n' + currentNumber[0]) && splittedByNewLine[j].includes('->') && (splittedByNewLine[j].indexOf('->') > splittedByNewLine[j].indexOf('n' + currentNumber))) {
+                            currentNumber[0] = splittedByNewLine[j].slice(splittedByNewLine[j].lastIndexOf('n') + 1, splittedByNewLine[j].lastIndexOf('[') - 1);
+                            break;
+                        }
+                    }
+                    break;
+                }
+            }
+        }
+    }
+    for (let i = 0; i < splittedByNewLine.length; i++) {
+        if (!splittedByNewLine[i].includes('->')) {
+            let stateNumber = splittedByNewLine[i].slice(splittedByNewLine[i].indexOf('n'), splittedByNewLine[i].indexOf('[') - 1);
+            if (throughNodes.includes(stateNumber)) {
+                splittedByNewLine[i] = splittedByNewLine[i].slice(0, splittedByNewLine[i].lastIndexOf(']')) + ',style=filled,color=limegreen];';
+            }
+        }
+    }
+    return splittedByNewLine.filter((element) => (element !== '')).join('\n');
+}
+
+function getTopNumber(splittedByNewLine, topNumber) {
+    for (let i = 0; i < splittedByNewLine.length; i++) {
+        if (splittedByNewLine[i].includes(' -> ')) {
+            let from = splittedByNewLine[i].slice(0, splittedByNewLine[i].indexOf(' '));
+            let fromNumber = from.slice(1, from.length);
+            topNumber[0] = Math.max(fromNumber, topNumber[0]);
+            let to = splittedByNewLine[i].slice(splittedByNewLine[i].indexOf('>') + 2, splittedByNewLine[i].indexOf('[') - 1);
+            let toNumber = to.slice(1, to.length);
+            topNumber[0] = Math.max(toNumber, topNumber[0]);
+        }
+    }
+    topNumber[0]++;
+}
+
+function twoToOne(code)
+{
+    code = code.replace(/&&/g, '&');
+    code = code.split('||').join('|');
+    return code;
+}
+function splitComplexConditions(code, toRemove) {
+    code = twoToOne(code)
+    let splittedByNewLine = code.split('\n');
+    let topNumber = [-1];
+    getTopNumber(splittedByNewLine, topNumber);
+    for (let i = 0; i < splittedByNewLine.length; i++) {
+        if (splittedByNewLine[i].includes('&')) {
+            let secondCond = splittedByNewLine[i].slice(splittedByNewLine[i].indexOf('&') + 2, splittedByNewLine[i].lastIndexOf('"'));
+            splittedByNewLine[i] = splittedByNewLine[i].slice(0, splittedByNewLine[i].indexOf('&')) + splittedByNewLine[i].slice(splittedByNewLine[i].lastIndexOf('"'), splittedByNewLine[i].length);
+            splittedByNewLine = splittedByNewLine.concat('n' + topNumber[0] + ' [label="' + secondCond + '"' + ',shape=diamond]');
+            let from = splittedByNewLine[i].slice(0, splittedByNewLine[i].indexOf(' '));
+            let to = 'n' + topNumber[0];
+            let transitionTrueCase;
+            let transitionFalseCase;
+            for (let j = 0; j < splittedByNewLine.length; j++) {
+                if (splittedByNewLine[j].includes('->') && splittedByNewLine[j].includes(from) && splittedByNewLine[j].includes('label="true"')) {
+                    transitionTrueCase = splittedByNewLine[j];
+                    if (!toRemove.includes(transitionTrueCase)) {
+                        splittedByNewLine[j] = '';
+                    }
+                    transitionTrueCase = transitionTrueCase.slice(transitionTrueCase.lastIndexOf('n'), transitionTrueCase.lastIndexOf(' '));
+                }
+                if (splittedByNewLine[j].includes('->') && splittedByNewLine[j].includes(from) && splittedByNewLine[j].includes('label="false"')) {
+                    transitionFalseCase = splittedByNewLine[j];
+                    transitionFalseCase = transitionFalseCase.slice(transitionFalseCase.lastIndexOf('n'), transitionFalseCase.lastIndexOf(' '));
+                }
+            }
+            splittedByNewLine = splittedByNewLine.concat(from + ' -> ' + to + ' [label="true"]');
+            toRemove.push(from + ' -> ' + to + ' [label="true"]');
+            splittedByNewLine = splittedByNewLine.concat(to + ' -> ' + transitionTrueCase + ' [label="true"]');
+            splittedByNewLine = splittedByNewLine.concat(to + ' -> ' + transitionFalseCase + ' [label="false"]');
+            break;
+        }
+        else if (splittedByNewLine[i].includes('|')) {
+            let secondCond = splittedByNewLine[i].slice(splittedByNewLine[i].indexOf('|') + 2, splittedByNewLine[i].lastIndexOf('"'));
+            splittedByNewLine[i] = splittedByNewLine[i].slice(0, splittedByNewLine[i].indexOf('|')) + splittedByNewLine[i].slice(splittedByNewLine[i].lastIndexOf('"'), splittedByNewLine[i].length);
+            splittedByNewLine = splittedByNewLine.concat('n' + topNumber[0] + ' [label="' + secondCond + '"' + ',shape=diamond]');
+            let from = splittedByNewLine[i].slice(0, splittedByNewLine[i].indexOf(' '));
+            let to = 'n' + topNumber[0];
+            let transitionTrueCase,transitionFalseCase;
+            for (let j = 0; j < splittedByNewLine.length; j++) {
+                if (splittedByNewLine[j].includes('->') && splittedByNewLine[j].includes(from) && splittedByNewLine[j].includes('label="true"')) {
+                    transitionTrueCase = splittedByNewLine[j];
+                    transitionTrueCase = transitionTrueCase.slice(transitionTrueCase.lastIndexOf('n'), transitionTrueCase.lastIndexOf(' '));
+                }
+                if (splittedByNewLine[j].includes('->') && splittedByNewLine[j].includes(from) && splittedByNewLine[j].includes('label="false"')) {
+                    transitionFalseCase = splittedByNewLine[j];
+                    if (!toRemove.includes(transitionFalseCase)) {
+                        splittedByNewLine[j] = '';
+                    }
+                    transitionFalseCase = transitionFalseCase.slice(transitionFalseCase.lastIndexOf('n'), transitionFalseCase.lastIndexOf(' '));
+                }
+            }
+            splittedByNewLine = splittedByNewLine.concat(from + ' -> ' + to + ' [label="false"]');
+            toRemove.push(from + ' -> ' + to + ' [label="false"]');
+            splittedByNewLine = splittedByNewLine.concat(to + ' -> ' + transitionTrueCase + ' [label="true"]');
+            splittedByNewLine = splittedByNewLine.concat(to + ' -> ' + transitionFalseCase + ' [label="false"]');
+            break;
+        }
+    }
+    let toReturnCode = splittedByNewLine.filter((element) => (element !== '')).join('\n');
+    splittedByNewLine = toReturnCode.split('\n');
+    let flag = false;
+    for (let i = 0; i < splittedByNewLine.length; i++) {
+        if (splittedByNewLine[i].includes('&') || splittedByNewLine[i].includes('|')) {
+            flag = true;
+            break;
+        }
+    }
+    if (flag) {
+        return splitComplexConditions(toReturnCode, toRemove);
     }
     else {
-        return substitutePartType[data.type](data, localVarsToVals, globalVarsToVals, argsToValues, functionAfterSub, arrayOfArgs, isGlobal);
+        return toReturnCode;
     }
 }
 
-const substitutePartType =
-    {
-        'FunctionDeclaration': substituteFunctionDeclaration,
-        'VariableDeclaration': substituteVariableDeclaration,
-        'ExpressionStatement': substituteExpressionStatement,
-        'WhileStatement': substituteWhileStatement,
-        'IfStatement': substituteIfStatement,
-        'AssignmentExpression': substituteAssignmentExpression,
-        'ReturnStatement': substituteReturnStatement
-    };
 
+function makeRectangle(code) {
+    let splittedByNewLine = code.split('\n');
+    for (let i = 0; i < splittedByNewLine.length; i++) {
+        if (!splittedByNewLine[i].includes('->')) {
+            if (!splittedByNewLine[i].includes('shape')) {
+                splittedByNewLine[i] = splittedByNewLine[i].slice(0, splittedByNewLine[i].lastIndexOf(']')) +
+                    ',shape=rectangle' + ']';
+            }
+        }
+    }
+    return splittedByNewLine.filter((element) => (element !== '')).join('\n');
+}
+
+function splitStatementsByNewLine(code) {
+    let splittedByNewLine = code.split('\n');
+    for (let i = 0; i < splittedByNewLine.length; i++) {
+        let count = (splittedByNewLine[i].match(/;/g) || []).length;
+        if (count > 0) {
+            splittedByNewLine[i] = splittedByNewLine[i].split(';').join('\n');
+        }
+    }
+    return splittedByNewLine.filter((element) => (element !== '')).join('\n');
+}
+
+function removeLetWord(code) {
+    code = code.replace(/;/g, '');
+    return code.replace(/let/g, '');
+}
+
+function fixArrows(splittedByNewLine, topNumber, stateToNumberOfArrowsIn, fromAndTo) {
+    for (let i = 0; i < splittedByNewLine.length; i++) {
+        if (splittedByNewLine[i].includes(' -> ')) {
+            let from = splittedByNewLine[i].slice(0, splittedByNewLine[i].indexOf(' '));
+            let fromNumber = from.slice(1, from.length);
+            topNumber[0] = Math.max(fromNumber, topNumber[0]);
+            let to = splittedByNewLine[i].slice(splittedByNewLine[i].indexOf('>') + 2, splittedByNewLine[i].indexOf('[') - 1);
+            let toNumber = to.slice(1, to.length);
+            topNumber[0] = Math.max(toNumber, topNumber[0]);
+            fromAndTo.set(from, to);
+            if (stateToNumberOfArrowsIn.has(to)) {
+                stateToNumberOfArrowsIn.set(to, stateToNumberOfArrowsIn.get(to) + 1);
+            }
+            else {
+                stateToNumberOfArrowsIn.set(to, 1);
+            }
+        }
+    }
+    topNumber[0]++;
+}
+
+function isOk(splittedByNewLine, i, key) {
+    return splittedByNewLine[i].includes(' -> ') && splittedByNewLine[i].includes(key) && (splittedByNewLine[i].indexOf(' -> ') < splittedByNewLine[i].indexOf(key));
+}
+
+function doMergeStates(code) {
+    let splittedByNewLine = code.split('\n');
+    let stateToNumberOfArrowsIn = new Map();
+    let fromAndTo = new Map();
+    let topNumber = [-1];
+    fixArrows(splittedByNewLine, topNumber, stateToNumberOfArrowsIn, fromAndTo);
+    for (let [key, value] of stateToNumberOfArrowsIn) {
+        if (value > 1) {
+            for (let i = 0; i < splittedByNewLine.length; i++) {
+                if (isOk(splittedByNewLine, i, key)) {
+                    splittedByNewLine[i] = splittedByNewLine[i].replace(key, 'n' + topNumber[0]);
+                }
+            }
+            splittedByNewLine = splittedByNewLine.concat('n' + topNumber[0] + ' [label=""]');
+            splittedByNewLine = splittedByNewLine.concat('n' + topNumber[0] + ' -> ' + key + ' []');
+            topNumber[0]++;
+        }
+    }
+    return splittedByNewLine.filter((element) => (element !== '')).join('\n');
+}
+
+
+function numberStates(code) {
+    let number = 1;
+    let splittedByNewLine = code.split('\n');
+    for (let i = 0; i < splittedByNewLine.length; i++) {
+        if (!splittedByNewLine[i].includes(' -> ') && splittedByNewLine[i].charAt(0) === 'n' && !splittedByNewLine[i].includes('""')) {
+            splittedByNewLine[i] = splittedByNewLine[i].slice(0, splittedByNewLine[i].indexOf('"') + 1) + '- ' + number + ' -' + '\n' +
+                splittedByNewLine[i].slice(splittedByNewLine[i].indexOf('"') + 1, splittedByNewLine[i].lastIndexOf(']') + 1);
+            number++;
+        }
+    }
+    return splittedByNewLine.filter((element) => (element !== '')).join('\n');
+}
+
+
+function followingIsOk(str1, str2, word) {
+    return !str1.includes(word) && !str2.includes(word);
+}
+
+function thereIsTransitions(str1, str2, code) {
+    let myState = str1.slice(0, str1.indexOf(' '));
+    let nextState = str2.slice(0, str2.indexOf(' '));
+    return code.includes(myState + ' -> ' + nextState);
+}
+
+function canUnify(str1, str2, splittedByNewLine) {
+    return followingIsOk(str1, str2, 'diamond') && followingIsOk(str1, str2, 'return') && followingIsOk(str1, str2, '->')
+        && (numberOfArrowsIn(str1, splittedByNewLine) <= 1) && (numberOfArrowsIn(str2, splittedByNewLine) <= 1);
+}
+
+function numberOfArrowsIn(str, splittedByNewLine) {
+    let counter = 0;
+    let myState = str.slice(0, str.indexOf(' '));
+    for (let i = 0; i < splittedByNewLine.length; i++) {
+        if (splittedByNewLine[i].includes('->') && splittedByNewLine[i].includes(myState) && (splittedByNewLine[i].indexOf('->') < splittedByNewLine[i].indexOf(myState))) {
+            counter++;
+        }
+    }
+    return counter;
+}
+
+function addSecondStatement(splittedByNewLine, i) {
+    let secondStatement = splittedByNewLine[i + 1].slice(splittedByNewLine[i + 1].indexOf('"') + 1, splittedByNewLine[i + 1].lastIndexOf('"'));
+    if (!secondStatement.includes(';')) {
+        secondStatement = secondStatement + ';';
+    }
+    if (splittedByNewLine[i].includes(';')) {
+
+        splittedByNewLine[i] = splittedByNewLine[i].slice(0, splittedByNewLine[i].lastIndexOf('"')) + secondStatement + '"]';
+    }
+    else {
+        splittedByNewLine[i] = splittedByNewLine[i].slice(0, splittedByNewLine[i].lastIndexOf('"')) + ';' + secondStatement + '"]';
+    }
+}
+
+function deleteNotNeededStates(splittedByNewLine, myState, nextState, i) {
+    for (let j = i + 2; j < splittedByNewLine.length; j++) {
+        if (splittedByNewLine[j] !== undefined) {
+            if (splittedByNewLine[j].includes(myState + ' -> ' + nextState)) {
+                splittedByNewLine[j] = '';
+            }
+            else if (splittedByNewLine[j].includes(nextState)) {
+                splittedByNewLine[j] = splittedByNewLine[j].replace(nextState, myState);
+            }
+        }
+    }
+}
+
+
+function unifyStates(code) {
+    let splittedByNewLine = code.split('\n');
+    for (let i = 0; i < splittedByNewLine.length; i++) {
+        if (((i + 1) < splittedByNewLine.length) && canUnify(splittedByNewLine[i], splittedByNewLine[i + 1], splittedByNewLine)
+            && thereIsTransitions(splittedByNewLine[i], splittedByNewLine[i + 1], splittedByNewLine.join('\n'))) {
+            addSecondStatement(splittedByNewLine, i);
+            let myState = splittedByNewLine[i].slice(0, splittedByNewLine[i].indexOf(' '));
+            let nextState = splittedByNewLine[i + 1].slice(0, splittedByNewLine[i + 1].indexOf(' '));
+            splittedByNewLine[i + 1] = '';
+            deleteNotNeededStates(splittedByNewLine, myState, nextState, i);
+            i = -1;
+            splittedByNewLine = splittedByNewLine.filter((element) => (element !== ''));
+        }
+    }
+    return splittedByNewLine.filter((element) => (element !== '')).join('\n');
+}
+
+
+function makeConditionsDiamondShape(code) {
+    let setOfConditions = new Set();
+    let splittedByNewLine = code.split('\n');
+    for (let i = 0; i < splittedByNewLine.length; i++) {
+        if (splittedByNewLine[i].includes('label="true"') || splittedByNewLine[i].includes('label="false"')) {
+            setOfConditions.add(splittedByNewLine[i].slice(0, splittedByNewLine[i].indexOf(' ')));
+        }
+    }
+    addDiamondShape(splittedByNewLine, setOfConditions);
+    return splittedByNewLine.filter((element) => (element !== '')).join('\n');
+}
+
+function addDiamondShape(splittedByNewLine, setOfConditions) {
+    for (let i = 0; i < splittedByNewLine.length; i++) {
+        if (!splittedByNewLine[i].includes('->')) {
+            if (setOfConditions.has(splittedByNewLine[i].slice(0, splittedByNewLine[i].indexOf(' ')))) {
+                splittedByNewLine[i] = splittedByNewLine[i].slice(0, splittedByNewLine[i].lastIndexOf(']')) +
+                    ',shape=diamond' + ']';
+            }
+        }
+    }
+}
+
+
+function deleteExceptionTransitions(code) {
+    let splittedByNewLine = code.split('\n');
+    for (let i = 0; i < splittedByNewLine.length; i++) {
+        if (splittedByNewLine[i].includes(', label="exception"')) {
+            splittedByNewLine[i] = '';
+        }
+    }
+    return splittedByNewLine.filter((element) => (element !== '')).join('\n');
+}
+
+function deleteEntryAndExitStates(code) {
+    let splittedByNewLine = code.split('\n');
+    let indexOfEntry, indexOfExit;
+    for (let i = 0; i < splittedByNewLine.length; i++) {
+        if (splittedByNewLine[i].includes('label="entry"')) {
+            indexOfEntry = splittedByNewLine[i].slice(1, splittedByNewLine[i].indexOf(' '));
+        }
+        if (splittedByNewLine[i].includes('label="exit"')) {
+            indexOfExit = splittedByNewLine[i].slice(1, splittedByNewLine[i].indexOf(' '));
+        }
+    }
+    doTheDeletion(splittedByNewLine, indexOfEntry, indexOfExit);
+    return splittedByNewLine.filter((element) => (element !== '')).join('\n');
+}
+
+function doTheDeletion(splittedByNewLine, indexOfEntry, indexOfExit) {
+    for (let i = 0; i < splittedByNewLine.length; i++) {
+        if (splittedByNewLine[i].includes('n' + indexOfEntry) || splittedByNewLine[i].includes('n' + indexOfExit)) {
+            splittedByNewLine[i] = '';
+        }
+    }
+}
 
 export {
-    parseCode
+    generateCFG
 };
-
-function substituteWhileStatement(data, localVarsToVals, globalVarsToVals, argsToValues, functionAfterSub, arrayOfArgs, isGlobal) {
-    let varValueString = escodegen.generate(data.test);
-    let varValueStringAfterSub = doSubstitute(varValueString, localVarsToVals);
-    functionAfterSub.append('while (' + varValueStringAfterSub + '){');
-    data.body.body.forEach(function (element) {
-        substitutePart(element, localVarsToVals, globalVarsToVals, argsToValues, functionAfterSub, arrayOfArgs, isGlobal);
-    });
-    functionAfterSub.append('}');
-}
-
-function substituteReturnStatement(data, localVarsToVals, globalVarsToVals, argsToValues, functionAfterSub) {
-    let varValueString = escodegen.generate(data.argument);
-    let varValueStringAfterSub = doSubstitute(varValueString, localVarsToVals);
-    functionAfterSub.append('return ' + varValueStringAfterSub + ';');
-}
-
-function substituteIfStatement(data, localVarsToVals, globalVarsToVals, argsToValues, functionAfterSub, arrayOfArgs, isGlobal) {
-    let varValueString = escodegen.generate(data.test);
-    let varValueStringAfterSub = doSubstitute(varValueString, localVarsToVals);
-    functionAfterSub.append('if (' + varValueStringAfterSub + ')');
-    let copyOfGlobalVarsToVals = new Map(globalVarsToVals);
-    let copyOfLocalVarsToVals = new Map(localVarsToVals);
-    checkBodyOfIf(data.consequent, copyOfLocalVarsToVals, copyOfGlobalVarsToVals, argsToValues, functionAfterSub, arrayOfArgs, isGlobal);
-    checkAlternate(data.alternate, localVarsToVals, globalVarsToVals, argsToValues, functionAfterSub, arrayOfArgs, isGlobal);
-}
-
-function checkBodyOfIf(data, localVarsToVals, globalVarsToVals, argsToValues, functionAfterSub, arrayOfArgs, isGlobal) {
-    if (data.type.localeCompare('BlockStatement') === 0) {
-        functionAfterSub.append('{');
-        data.body.forEach(function (element) {
-            substitutePart(element, localVarsToVals, globalVarsToVals, argsToValues, functionAfterSub, arrayOfArgs, isGlobal);
-        });
-        functionAfterSub.append('}');
-    }
-    else {
-        substitutePart(data, localVarsToVals, globalVarsToVals, argsToValues, functionAfterSub, arrayOfArgs, isGlobal);
-    }
-}
-
-
-function checkAlternate(data, localVarsToVals, globalVarsToVals, argsToValues, functionAfterSub, arrayOfArgs, isGlobal) {
-    if (data !== null) {
-        if (data.type.localeCompare('IfStatement') === 0) {
-            substituteElseIfStatement(data, localVarsToVals, globalVarsToVals, argsToValues, functionAfterSub, arrayOfArgs, isGlobal);
-
-        }
-        else {
-            substituteElseStatement(data, localVarsToVals, globalVarsToVals, argsToValues, functionAfterSub, arrayOfArgs, isGlobal);
-        }
-    }
-}
-
-function substituteElseIfStatement(data, localVarsToVals, globalVarsToVals, argsToValues, functionAfterSub, arrayOfArgs, isGlobal) {
-    let varValueString = escodegen.generate(data.test);
-    let varValueStringAfterSub = doSubstitute(varValueString, localVarsToVals);
-    functionAfterSub.append('else if (' + varValueStringAfterSub + ')');
-    let copyOfGlobalVarsToVals = new Map(globalVarsToVals);
-    let copyOfLocalVarsToVals = new Map(localVarsToVals);
-    checkBodyOfIf(data.consequent, copyOfLocalVarsToVals, copyOfGlobalVarsToVals, argsToValues, functionAfterSub, arrayOfArgs, isGlobal);
-    checkAlternate(data.alternate, localVarsToVals, globalVarsToVals, argsToValues, functionAfterSub, arrayOfArgs, isGlobal);
-}
-
-function substituteElseStatement(data, localVarsToVals, globalVarsToVals, argsToValues, functionAfterSub, arrayOfArgs, isGlobal) {
-    functionAfterSub.append('else ');
-    let copyOfGlobalVarsToVals = new Map(globalVarsToVals);
-    let copyOfLocalVarsToVals = new Map(localVarsToVals);
-    checkBodyOfIf(data, copyOfLocalVarsToVals, copyOfGlobalVarsToVals, argsToValues, functionAfterSub, arrayOfArgs, isGlobal);
-}
-
-function substituteExpressionStatement(data, localVarsToVals, globalVarsToVals, argsToValues, functionAfterSub, arrayOfArgs, isGlobal) {
-    substituteAssignmentExpression(data.expression, localVarsToVals, globalVarsToVals, argsToValues, functionAfterSub, arrayOfArgs, isGlobal);
-}
-
-function substituteAssignmentExpression(data, localVarsToVals, globalVarsToVals, argsToValues, functionAfterSub, arrayOfArgs, isGlobal) {
-    let varNameString = escodegen.generate(data.left);
-    let varValueString = escodegen.generate(data.right);
-    let varValueStringAfterSub = doSubstitute(varValueString, localVarsToVals);
-    if (isGlobal) {
-        globalVarsToVals.set(varNameString, varValueStringAfterSub);
-    }
-    else if (!globalVarsToVals.has(varNameString) && !argsToValues.has(varNameString)) {
-        localVarsToVals.set(varNameString, varValueStringAfterSub);
-    }
-    appendAssignment(varNameString, varValueStringAfterSub, globalVarsToVals, argsToValues, functionAfterSub);
-}
-
-function appendAssignment(varNameString, varValueStringAfterSub, globalVarsToVals, argsToValues, functionAfterSub) {
-    if (globalVarsToVals.has(varNameString) || argsToValues.has(getVarName(varNameString))) {
-        functionAfterSub.append(varNameString + ' = ' + varValueStringAfterSub + ';');
-    }
-}
-
-function setValueToVar(varName, varValue, isGlobal, localVarsToVals, globalVarsToVals) {
-    if (isGlobal) {
-        globalVarsToVals.set(varName, varValue);
-    }
-    else {
-        localVarsToVals.set(varName, varValue);
-    }
-}
-
-function substituteVariableDeclaration(data, localVarsToVals, globalVarsToVals, argsToValues, functionAfterSub, arrayOfArgs, isGlobal) {
-    data.declarations.forEach(function (element) {
-        if (element.init === null) {
-            setValueToVar(element.id.name, undefined, isGlobal, localVarsToVals, globalVarsToVals);
-        }
-        else {
-            let varNameString = element.id.name;
-            let varValueString = escodegen.generate(element.init).replace(/[\n]/g, '');
-            if (varValueString.indexOf('[') !== -1) {
-                varValueString = varValueString.replace(/ /g, '');
-            }
-            let varValueStringAfterSub = doSubstituteWithGlobals(varValueString, localVarsToVals, globalVarsToVals);
-            setValueToVar(varNameString, varValueStringAfterSub, isGlobal, localVarsToVals, globalVarsToVals);
-            if (globalVarsToVals.has(varNameString)) {
-                functionAfterSub.append('let ' + varNameString + ' = ' + varValueStringAfterSub + ';');
-            }
-        }
-    });
-}
-
-function substituteFunctionDeclaration(data, localVarsToVals, globalVarsToVals, argsToValues, functionAfterSub, arrayOfArgs) {
-    functionAfterSub.append('function ' + data.id.name + '(');
-    let index = 0;
-    data.params.forEach(function (element) {
-        if (index === arrayOfArgs.length - 1) {
-            functionAfterSub.append(element.name);
-        }
-        else {
-            functionAfterSub.append(element.name + ', ');
-        }
-        argsToValues.set(element.name, arrayOfArgs[index]);
-        index++;
-    });
-    functionAfterSub.append('){');
-    data.body.body.forEach(function (element) {
-        substitutePart(element, localVarsToVals, globalVarsToVals, argsToValues, functionAfterSub, arrayOfArgs, false);
-    });
-    functionAfterSub.append('}');
-}
-
-function doSubstitute(beforeSub, localVarsToVals) {
-    let beforeSubSplittedBySpace = beforeSub.split(' ');
-    for (let i = 0; i < beforeSubSplittedBySpace.length; i++) {
-        let openParen = false;
-        let closeParen = false;
-        if (beforeSubSplittedBySpace[i].indexOf('(') !== -1) {
-            openParen = true;
-            beforeSubSplittedBySpace[i] = beforeSubSplittedBySpace[i].substring(1, beforeSubSplittedBySpace[i].length);
-        }
-        if (beforeSubSplittedBySpace[i].indexOf(')') !== -1) {
-            closeParen = true;
-            beforeSubSplittedBySpace[i] = beforeSubSplittedBySpace[i].substring(0, beforeSubSplittedBySpace[i].length - 1);
-        }
-        doSub(localVarsToVals, beforeSubSplittedBySpace, i);
-        addOpenParen(openParen, beforeSubSplittedBySpace, i);
-        addCloseParen(closeParen, beforeSubSplittedBySpace, i);
-    }
-    return beforeSubSplittedBySpace.join(' ');
-}
-
-function addOpenParen(openParen, beforeSubSplittedBySpace, i) {
-    if (openParen) {
-        beforeSubSplittedBySpace[i] = '(' + beforeSubSplittedBySpace[i];
-    }
-}
-
-function addCloseParen(closeParen, beforeSubSplittedBySpace, i) {
-    if (closeParen) {
-        beforeSubSplittedBySpace[i] = beforeSubSplittedBySpace[i] + ')';
-    }
-}
-
-function checkNeedForParenBefore(i, beforeSubSplittedBySpace) {
-    return (((i + 1) < beforeSubSplittedBySpace.length) && (beforeSubSplittedBySpace[i + 1] === '*' || beforeSubSplittedBySpace[i + 1] === '/')
-        || (beforeSubSplittedBySpace[i + 1] === '-'));
-}
-
-function checkNeedForParenAfter(i, beforeSubSplittedBySpace) {
-    return (((i - 1) >= 0) && (beforeSubSplittedBySpace[i - 1] === '*' || beforeSubSplittedBySpace[i - 1] === '/') || beforeSubSplittedBySpace[i - 1] === '-');
-}
-
-function checkNeedForParen(i, beforeSubSplittedBySpace) {
-    return (checkNeedForParenBefore(i, beforeSubSplittedBySpace) || checkNeedForParenAfter(i, beforeSubSplittedBySpace));
-}
-
-function doSub(VarsToVals, beforeSubSplittedBySpace, i) {
-    if (VarsToVals.has(beforeSubSplittedBySpace[i])) {
-        if (checkNeedForParen(i, beforeSubSplittedBySpace)) {
-            beforeSubSplittedBySpace[i] = '(' + VarsToVals.get(beforeSubSplittedBySpace[i]) + ')';
-        }
-        else {
-            beforeSubSplittedBySpace[i] = VarsToVals.get(beforeSubSplittedBySpace[i]);
-        }
-    }
-    else if (VarsToVals.has(getVarName(beforeSubSplittedBySpace[i]))) {
-        beforeSubSplittedBySpace[i] = VarsToVals.get(getVarName(beforeSubSplittedBySpace[i])) + beforeSubSplittedBySpace[i].substring(beforeSubSplittedBySpace[i].indexOf('['), beforeSubSplittedBySpace[i].lastIndexOf(']') + 1);
-    }
-    else if (VarsToVals.has(getVarName2(beforeSubSplittedBySpace[i]))) {
-        beforeSubSplittedBySpace[i] = VarsToVals.get(getVarName2(beforeSubSplittedBySpace[i])) + beforeSubSplittedBySpace[i].substring(beforeSubSplittedBySpace[i].indexOf('.'), beforeSubSplittedBySpace[i].length);
-    }
-}
-
-function doSubstituteWithGlobals(toTest, argsToValues, globalVarsToVals) {
-    let beforeSubSplittedBySpace = toTest.split(' ');
-    for (let i = 0; i < beforeSubSplittedBySpace.length; i++) {
-        doSub(argsToValues, beforeSubSplittedBySpace, i);
-        doSub(globalVarsToVals, beforeSubSplittedBySpace, i);
-    }
-    return beforeSubSplittedBySpace.join(' ');
-}
 
 function divideIntoArgs(argumentsSection) {
     let arrayOfArgsToReturn = [];
@@ -288,79 +431,6 @@ function pushTheRest(argumentsSection, arrayOfArgsToReturn) {
         let firstArgs = argumentsSection.split(',');
         for (let i = 0; i < firstArgs.length; i++) {
             arrayOfArgsToReturn.push(firstArgs[i]);
-        }
-    }
-}
-
-function getVarName(expression) {
-    let indexOfParen = expression.indexOf('[');
-    if (indexOfParen === -1) {
-        return expression;
-    }
-    else {
-        return expression.substring(0, indexOfParen);
-    }
-}
-
-function getVarName2(expression) {
-    let indexOfDot = expression.indexOf('.');
-    if (indexOfDot === -1) {
-        return expression;
-    }
-    else {
-        return expression.substring(0, indexOfDot);
-    }
-}
-
-function determineColors(functionAfterSub, linesToGreen, linesToRed, argsToValues, globalVarsToVals) {
-    let parsedFunc = esprima.parseScript(functionAfterSub, {loc: true, range: true});
-    parsedFunc.body.forEach(function (element) {
-        if (element.type.localeCompare('FunctionDeclaration') === 0) {
-            element.body.body.forEach(function (element) {
-                determineLinesOfColors(element, linesToGreen, linesToRed, argsToValues, globalVarsToVals);
-            });
-        }
-    });
-}
-
-function determineLinesOfColors(element, linesToGreen, linesToRed, argsToValues, globalVarsToVals) {
-    if (element.type.localeCompare('IfStatement') === 0) {
-        let toTest = escodegen.generate(element.test);
-        toTest = toTest.split('(').join('( ');
-        toTest = toTest.split(')').join(' )');
-        toTest = doSubstituteWithGlobals(toTest, argsToValues, globalVarsToVals);
-        doSafeEval(toTest, linesToRed, linesToGreen, element);
-        checkInsideOfGreenIf(element, linesToGreen, linesToRed, argsToValues, globalVarsToVals);
-        if (checkIfAlternateIsIfStatement(element)) {
-            if (!linesToGreen.includes(element.loc.start.line)) {
-                determineLinesOfColors(element.alternate, linesToGreen, linesToRed, argsToValues, globalVarsToVals);
-            }
-        }
-    }
-}
-
-function checkIfAlternateIsIfStatement(element) {
-    return (element.alternate !== null && element.alternate.type.localeCompare('IfStatement') === 0);
-}
-
-function doSafeEval(toTest, linesToRed, linesToGreen, element) {
-    if (eval(toTest)) {
-        linesToGreen.push(element.loc.start.line);
-    }
-    else {
-        linesToRed.push(element.loc.start.line);
-    }
-}
-
-function checkInsideOfGreenIf(element, linesToGreen, linesToRed, argsToValues, globalVarsToVals) {
-    if (linesToGreen.includes(element.loc.start.line)) {
-        if (element.consequent.type.localeCompare('BlockStatement') === 0) {
-            element.consequent.body.forEach(function (element) {
-                determineLinesOfColors(element, linesToGreen, linesToRed, argsToValues, globalVarsToVals);
-            });
-        }
-        else {
-            determineLinesOfColors(element.consequent, linesToGreen, linesToRed, argsToValues, globalVarsToVals);
         }
     }
 }
