@@ -765,14 +765,14 @@ describe('Assignment 3', () => {
     it('Test 11', () => {
         let codeToParse = 'function myFunc(a,b)\n' +
             '{\n' +
-            '\tif(a.length === 3)\n' +
-            '\t{\n' +
-            '\t\treturn 10;\n' +
-            '\t}\n' +
-            '\telse\n' +
-            '\t{\n' +
-            '\t\treturn 20;\n' +
-            '\t}\n' +
+            'if(a.length === 3)\n' +
+            '{\n' +
+            'return 10;\n' +
+            '}\n' +
+            'else\n' +
+            '{\n' +
+            'return 20;\n' +
+            '}\n' +
             '}';
         let argumentsSection = '[1,2,3]';
         let dotCode = generateCFG(codeToParse, argumentsSection);
@@ -793,22 +793,22 @@ describe('Assignment 3', () => {
     it('Test 12', () => {
         let codeToParse = 'function tomerTest(str1,str2,flag)\n' +
             '{\n' +
-            '\tlet flag1 = (str1[0] === \'T\');\n' +
-            '\tlet flag2 = (str2[0] === \'L\');\n' +
-            '\tif(str1 || str2 || flag)\n' +
-            '\t{\n' +
-            '\t\treturn \'Complex And Case\';\n' +
-            '\t}\n' +
-            '\telse if(!flag2)\n' +
-            '\t{\n' +
-            '\t\tlet i = 30;\n' +
-            '\t\tlet y = 15;\n' +
-            '\t\treturn i/y;\n' +
-            '\t}\n' +
-            '\telse\n' +
-            '\t{\n' +
-            '\t\treturn \'Finally Done\'\n' +
-            '\t}\n' +
+            'let flag1 = (str1[0] === \'T\');\n' +
+            'let flag2 = (str2[0] === \'L\');\n' +
+            'if(str1 || str2 || flag)\n' +
+            '{\n' +
+            'return \'Complex And Case\';\n' +
+            '}\n' +
+            'else if(!flag2)\n' +
+            '{\n' +
+            'let i = 30;\n' +
+            'let y = 15;\n' +
+            'return i/y;\n' +
+            '}\n' +
+            'else\n' +
+            '{\n' +
+            'return \'Finally Done\'\n' +
+            '}\n' +
             '}';
         let argumentsSection = '\'Tomer\',\'Lev\',true';
         let dotCode = generateCFG(codeToParse, argumentsSection);
