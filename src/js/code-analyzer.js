@@ -339,7 +339,7 @@ function canUnify(str1, str2, splittedByNewLine) {
 
 function numberOfArrowsIn(str, splittedByNewLine) {
     let counter = 0;
-    let myState = str.slice(0, str.indexOf(' '));
+    let myState = str.slice(0, str.indexOf(' ') + 1);
     for (let i = 0; i < splittedByNewLine.length; i++) {
         if (splittedByNewLine[i].includes('->') && splittedByNewLine[i].includes(myState) && (splittedByNewLine[i].indexOf('->') < splittedByNewLine[i].indexOf(myState))) {
             counter++;
@@ -364,13 +364,11 @@ function addSecondStatement(splittedByNewLine, i) {
 
 function deleteNotNeededStates(splittedByNewLine, myState, nextState, i) {
     for (let j = i + 2; j < splittedByNewLine.length; j++) {
-        if (splittedByNewLine[j] !== undefined) {
-            if (splittedByNewLine[j].includes(myState + ' -> ' + nextState)) {
-                splittedByNewLine[j] = '';
-            }
-            else if (splittedByNewLine[j].includes(nextState)) {
-                splittedByNewLine[j] = splittedByNewLine[j].replace(nextState, myState);
-            }
+        if (splittedByNewLine[j].includes(myState + ' -> ' + nextState)) {
+            splittedByNewLine[j] = '';
+        }
+        else if (splittedByNewLine[j].includes(nextState)) {
+            splittedByNewLine[j] = splittedByNewLine[j].replace(nextState, myState + ' ');
         }
     }
 }
@@ -383,7 +381,7 @@ function unifyStates(code) {
             && thereIsTransitions(splittedByNewLine[i], splittedByNewLine[i + 1], splittedByNewLine.join('\n'))) {
             addSecondStatement(splittedByNewLine, i);
             let myState = splittedByNewLine[i].slice(0, splittedByNewLine[i].indexOf(' '));
-            let nextState = splittedByNewLine[i + 1].slice(0, splittedByNewLine[i + 1].indexOf(' '));
+            let nextState = splittedByNewLine[i + 1].slice(0, splittedByNewLine[i + 1].indexOf(' ') + 1);
             splittedByNewLine[i + 1] = '';
             deleteNotNeededStates(splittedByNewLine, myState, nextState, i);
             i = -1;
